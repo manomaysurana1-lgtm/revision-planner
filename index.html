@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Revision Control Panel</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  html, body, #root { height: 100%; }
+  body { margin: 0; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .animate-spin { animation: spin 1s linear infinite; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+  // ---------------------------------------------------------------
+  // window.storage shim
+  // The original app was built for Claude's artifact runtime, which
+  // provides a window.storage key/value API. This page is standalone
+  // (e.g. hosted on GitHub Pages), so this shim re-implements the same
+  // interface on top of localStorage, keeping the app code unchanged.
+  // Data is stored per-browser/per-device only (no cross-device sync).
+  // ---------------------------------------------------------------
+  window.storage = {
+    async get(key) {
+      const v = localStorage.getItem(key);
+      if (v === null) return null;
+      return { key, value: v, shared: false };
+    },
+    async set(key, value) {
+      try {
+        localStorage.setItem(key, value);
+        return { key, value, shared: false };
+      } catch (e) {
+        return null;
+      }
+    },
+    async delete(key) {
+      localStorage.removeItem(key);
+      return { key, deleted: true, shared: false };
+    },
+    async list(prefix) {
+      const keys = Object.keys(localStorage).filter((k) => !prefix || k.startsWith(prefix));
+      return { keys, prefix, shared: false };
+    },
+  };
+</script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef } = React;
+
+// ---------- icon components (hand-drawn, lucide-style, no external icon dependency) ----------
+function Icon({ size = 16, className = "", children }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      {children}
+    </svg>
+  );
+}
+const ChevronUp = (p) => <Icon {...p}><polyline points="18 15 12 9 6 15" /></Icon>;
+const ChevronDown = (p) => <Icon {...p}><polyline points="6 9 12 15 18 9" /></Icon>;
+const Trash2 = (p) => (
+  <Icon {...p}>
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    <path d="M10 11v6" /><path d="M14 11v6" />
+    <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+  </Icon>
+);
+const Plus = (p) => <Icon {...p}><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></Icon>;
+const Calendar = (p) => (
+  <Icon {...p}>
+    <rect x="3" y="4" width="18" height="18" rx="2" />
+    <line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" />
+  </Icon>
+);
+const ClipboardList = (p) => (
+  <Icon {...p}>
+    <rect x="6" y="3" width="12" height="18" rx="1.5" />
+    <path d="M9 3V2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1" />
+    <line x1="9" y1="9" x2="9.01" y2="9" /><line x1="12" y1="9" x2="15" y2="9" />
+    <line x1="9" y1="13" x2="9.01" y2="13" /><line x1="12" y1="13" x2="15" y2="13" />
+    <line x1="9" y1="17" x2="9.01" y2="17" /><line x1="12" y1="17" x2="15" y2="17" />
+  </Icon>
+);
+const Clock = (p) => (
+  <Icon {...p}><circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 16 14" /></Icon>
+);
+const Flame = (p) => (
+  <Icon {...p}>
+    <path d="M12 2c1 4-4 5-4 10a4 4 0 0 0 8 0c0-2-1-3-1-3s2 1 2 4a6 6 0 0 1-12 0c0-6 5-6 7-11z" />
+  </Icon>
+);
+const CheckCircle2 = (p) => (
+  <Icon {...p}><circle cx="12" cy="12" r="9" /><polyline points="8.5 12.5 11 15 16 9" /></Icon>
+);
+const AlertCircle = (p) => (
+  <Icon {...p}><circle cx="12" cy="12" r="9" /><line x1="12" y1="8" x2="12" y2="13" /><line x1="12" y1="16.5" x2="12.01" y2="16.5" /></Icon>
+);
+const Loader2 = (p) => (
+  <Icon {...p}><path d="M21 12a9 9 0 1 1-6.219-8.56" /></Icon>
+);
+const Shuffle = (p) => (
+  <Icon {...p}>
+    <polyline points="16 3 21 3 21 8" /><line x1="4" y1="20" x2="21" y2="3" />
+    <polyline points="21 16 21 21 16 21" /><line x1="15" y1="15" x2="21" y2="21" /><line x1="4" y1="4" x2="9" y2="9" />
+  </Icon>
+);
+const Plane = (p) => (
+  <Icon {...p}><path d="M2 12l19-9-7 19-3-8-9-2z" /></Icon>
+);
+
+// ---------- constants ----------
+const GROUPS = [
+  { id: "quant", label: "Quant/Logic" },
+  { id: "sciences", label: "Sciences" },
+  { id: "humanities", label: "Humanities" },
+  { id: "spanish", label: "Spanish" },
+  { id: "other", label: "Other" },
+];
+
+const GROUP_STYLE = {
+  quant: { bg: "bg-blue-50", border: "border-blue-300", text: "text-blue-700", dot: "bg-blue-500", chip: "bg-blue-100 text-blue-800" },
+  sciences: { bg: "bg-emerald-50", border: "border-emerald-300", text: "text-emerald-700", dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-800" },
+  humanities: { bg: "bg-violet-50", border: "border-violet-300", text: "text-violet-700", dot: "bg-violet-500", chip: "bg-violet-100 text-violet-800" },
+  spanish: { bg: "bg-amber-50", border: "border-amber-300", text: "text-amber-700", dot: "bg-amber-500", chip: "bg-amber-100 text-amber-800" },
+  other: { bg: "bg-slate-50", border: "border-slate-300", text: "text-slate-700", dot: "bg-slate-500", chip: "bg-slate-100 text-slate-800" },
+};
+
+const ACTIVITY_TYPES = ["Content Learning", "Active Recall", "Past Paper Spam", "Maintenance Review", "Spanish Drip", "Other"];
+
+// Leitner-style intervals (days) — box 0 = review tomorrow, box 4 = review in 35 days
+const LEITNER_DAYS = [1, 3, 7, 16, 35];
+
+// Phase 1 (mocks prep): 30 Aug – 1 Nov 2026, minus the school-trip blocked range.
+// Maths deliberately capped below CompSci/Econ/Geo per Manomay's instruction.
+const DEFAULT_BLOCKS = [
+  { id: "b1", subject: "Maths P1+P2", group: "quant", days: 4, note: "3 content + 1 timed practice" },
+  { id: "b2", subject: "Computer Science P1", group: "quant", days: 5, note: "4 content + 1 spam" },
+  { id: "b3", subject: "Economics P1", group: "quant", days: 5, note: "4 content + 1 spam (spans the trip)" },
+  { id: "b4", subject: "Biology P1", group: "sciences", days: 6, note: "5 content + 1 spam" },
+  { id: "b5", subject: "Chemistry P1", group: "sciences", days: 6, note: "5 content + 1 spam" },
+  { id: "b6", subject: "Physics P1", group: "sciences", days: 6, note: "5 content + 1 spam" },
+  { id: "b7", subject: "Sciences SPAM", group: "sciences", days: 4, note: "Bio+Chem+Physics P1 mixed" },
+  { id: "b8", subject: "English Language P1", group: "humanities", days: 4, note: "Technique-heavy" },
+  { id: "b9", subject: "English Literature P1", group: "humanities", days: 5, note: "4 content + 1 spam" },
+  { id: "b10", subject: "Geography P1", group: "humanities", days: 5, note: "4 content + 1 spam" },
+  { id: "b11", subject: "Cross-subject spam + taper", group: "other", days: 8, note: "All 10 subjects, pre-mock" },
+  // ---- Phase 2 (real IGCSEs, April) — unchanged, shifts automatically after Phase 1 ----
+  { id: "b12", subject: "Post-mock debrief", group: "other", days: 7, note: "Re-rank weak areas" },
+  { id: "b13", subject: "Maths P3", group: "quant", days: 14, note: "Content + spam" },
+  { id: "b14", subject: "Computer Science P2", group: "quant", days: 7, note: "" },
+  { id: "b15", subject: "Economics P2", group: "quant", days: 7, note: "" },
+  { id: "b16", subject: "Biology P2", group: "sciences", days: 7, note: "" },
+  { id: "b17", subject: "Chemistry P2", group: "sciences", days: 7, note: "" },
+  { id: "b18", subject: "Physics P2", group: "sciences", days: 7, note: "" },
+  { id: "b19", subject: "Sciences P2 SPAM", group: "sciences", days: 7, note: "" },
+  { id: "b20", subject: "English Language P2", group: "humanities", days: 7, note: "" },
+  { id: "b21", subject: "Geography P2", group: "humanities", days: 7, note: "" },
+  { id: "b22", subject: "Spanish intensive block", group: "spanish", days: 14, note: "Writing + speaking mocks" },
+  { id: "b23", subject: "Full cross-subject spam era", group: "other", days: 56, note: "Everything, on rotation" },
+];
+
+const DEFAULT_TIME = { weekdayHours: 2.5, weekendHours: 5 };
+const DEFAULT_START = "2026-08-30";
+const DEFAULT_BLOCKED = [
+  { id: "trip1", start: "2026-09-11", end: "2026-09-16", label: "School trip" },
+];
+
+function genId() {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
+function addDays(dateStr, days) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + Math.round(days));
+  return d;
+}
+function toISO(d) {
+  return d.toISOString().slice(0, 10);
+}
+function fmt(d) {
+  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" });
+}
+function todayISO() {
+  return toISO(new Date());
+}
+function isBlocked(dateISO, blockedRanges) {
+  return blockedRanges.some((r) => dateISO >= r.start && dateISO <= r.end);
+}
+
+function RevisionPlanner() {
+  const [tab, setTab] = useState("planner");
+  const [blocks, setBlocks] = useState(DEFAULT_BLOCKS);
+  const [blockedRanges, setBlockedRanges] = useState(DEFAULT_BLOCKED);
+  const [timeSettings, setTimeSettings] = useState(DEFAULT_TIME);
+  const [planStart, setPlanStart] = useState(DEFAULT_START);
+  const [logs, setLogs] = useState([]);
+  const [topics, setTopics] = useState({});
+  const [loaded, setLoaded] = useState(false);
+  const [saveState, setSaveState] = useState("idle");
+  const loadedRef = useRef(false);
+
+  // ---------- load ----------
+  useEffect(() => {
+    (async () => {
+      try {
+        const planner = await window.storage.get("planner-data");
+        if (planner?.value) {
+          const parsed = JSON.parse(planner.value);
+          if (parsed.blocks) setBlocks(parsed.blocks);
+          if (parsed.blockedRanges) setBlockedRanges(parsed.blockedRanges);
+          if (parsed.timeSettings) setTimeSettings(parsed.timeSettings);
+          if (parsed.planStart) setPlanStart(parsed.planStart);
+        }
+      } catch (e) {}
+      try {
+        const logData = await window.storage.get("logs-data");
+        if (logData?.value) {
+          const parsed = JSON.parse(logData.value);
+          if (parsed.logs) setLogs(parsed.logs);
+          if (parsed.topics) setTopics(parsed.topics);
+        }
+      } catch (e) {}
+      loadedRef.current = true;
+      setLoaded(true);
+    })();
+  }, []);
+
+  // ---------- save ----------
+  useEffect(() => {
+    if (!loadedRef.current) return;
+    setSaveState("saving");
+    window.storage
+      .set("planner-data", JSON.stringify({ blocks, blockedRanges, timeSettings, planStart }))
+      .then((r) => setSaveState(r ? "saved" : "error"))
+      .catch(() => setSaveState("error"));
+  }, [blocks, blockedRanges, timeSettings, planStart]);
+
+  useEffect(() => {
+    if (!loadedRef.current) return;
+    setSaveState("saving");
+    window.storage
+      .set("logs-data", JSON.stringify({ logs, topics }))
+      .then((r) => setSaveState(r ? "saved" : "error"))
+      .catch(() => setSaveState("error"));
+  }, [logs, topics]);
+
+  // ---------- derived schedule (skips blocked date ranges) ----------
+  const schedule = (() => {
+    let cursor = planStart;
+    return blocks.map((b) => {
+      while (isBlocked(cursor, blockedRanges)) cursor = toISO(addDays(cursor, 1));
+      const start = cursor;
+      let count = 0;
+      let d = cursor;
+      let last = cursor;
+      let spansBreak = false;
+      while (count < b.days) {
+        if (isBlocked(d, blockedRanges)) {
+          spansBreak = true;
+        } else {
+          last = d;
+          count++;
+        }
+        if (count < b.days) d = toISO(addDays(d, 1));
+      }
+      const end = last;
+      let next = toISO(addDays(last, 1));
+      while (isBlocked(next, blockedRanges)) next = toISO(addDays(next, 1));
+      cursor = next;
+      return { ...b, start, end, spansBreak };
+    });
+  })();
+  const totalDays = blocks.reduce((s, b) => s + b.days, 0);
+  const planEnd = schedule.length ? schedule[schedule.length - 1].end : planStart;
+  const weeklyHours = timeSettings.weekdayHours * 5 + timeSettings.weekendHours * 2;
+  const uniqueSubjects = [...new Set(blocks.map((b) => b.subject))];
+
+  // ---------- block editing ----------
+  function updateBlock(id, patch) {
+    setBlocks((bs) => bs.map((b) => (b.id === id ? { ...b, ...patch } : b)));
+  }
+  function moveBlock(id, dir) {
+    setBlocks((bs) => {
+      const i = bs.findIndex((b) => b.id === id);
+      const j = i + dir;
+      if (j < 0 || j >= bs.length) return bs;
+      const copy = [...bs];
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+      return copy;
+    });
+  }
+  function deleteBlock(id) {
+    setBlocks((bs) => bs.filter((b) => b.id !== id));
+  }
+  function addBlock() {
+    setBlocks((bs) => [...bs, { id: genId(), subject: "New subject", group: "other", days: 7, note: "" }]);
+  }
+
+  // ---------- blocked-range editing ----------
+  function updateBlocked(id, patch) {
+    setBlockedRanges((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  }
+  function deleteBlocked(id) {
+    setBlockedRanges((rs) => rs.filter((r) => r.id !== id));
+  }
+  function addBlocked() {
+    setBlockedRanges((rs) => [...rs, { id: genId(), start: todayISO(), end: todayISO(), label: "Unavailable" }]);
+  }
+
+  // ---------- logging + spaced repetition ----------
+  function submitLog(entry) {
+    const logEntry = { id: genId(), ...entry };
+    setLogs((ls) => [logEntry, ...ls]);
+    if (entry.autoSchedule) {
+      const key = `${entry.subject.trim().toLowerCase()}||${(entry.topic || "(general)").trim().toLowerCase()}`;
+      setTopics((ts) => {
+        const existing = ts[key];
+        let box = existing ? existing.box : 0;
+        if (entry.confidence >= 4) box = Math.min(box + 1, LEITNER_DAYS.length - 1);
+        else if (entry.confidence === 3) box = box;
+        else box = 0;
+        const nextReviewDate = toISO(addDays(entry.date, LEITNER_DAYS[box]));
+        return {
+          ...ts,
+          [key]: {
+            subject: entry.subject,
+            topic: entry.topic || "(general)",
+            box,
+            nextReviewDate,
+            lastConfidence: entry.confidence,
+            lastReviewed: entry.date,
+          },
+        };
+      });
+    }
+  }
+  function deleteLog(id) {
+    setLogs((ls) => ls.filter((l) => l.id !== id));
+  }
+  function deleteTopic(key) {
+    setTopics((ts) => {
+      const copy = { ...ts };
+      delete copy[key];
+      return copy;
+    });
+  }
+
+  const dueTopics = Object.entries(topics)
+    .filter(([, t]) => t.nextReviewDate <= todayISO())
+    .sort((a, b) => a[1].nextReviewDate.localeCompare(b[1].nextReviewDate));
+  const upcomingTopics = Object.entries(topics)
+    .filter(([, t]) => t.nextReviewDate > todayISO() && t.nextReviewDate <= toISO(addDays(todayISO(), 7)))
+    .sort((a, b) => a[1].nextReviewDate.localeCompare(b[1].nextReviewDate));
+  const interleaveMix = (() => {
+    const seen = new Set();
+    const mix = [];
+    for (const [key, t] of dueTopics) {
+      if (!seen.has(t.subject) && mix.length < 3) {
+        seen.add(t.subject);
+        mix.push([key, t]);
+      }
+    }
+    return mix;
+  })();
+  const sessionsThisWeek = logs.filter((l) => l.date >= toISO(addDays(todayISO(), -6))).length;
+
+  if (!loaded) {
+    return (
+      <div className="flex items-center justify-center h-64 text-slate-500 gap-2">
+        <Loader2 className="animate-spin" size={20} /> Loading your planner…
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-3xl mx-auto p-4 pb-16 font-sans text-slate-800 bg-slate-50 min-h-screen">
+      <header className="mb-4">
+        <h1 className="text-xl font-bold tracking-tight text-slate-900">Revision Control Panel</h1>
+        <p className="text-sm text-slate-500 mt-0.5">
+          Editable calendar · session logger · spaced-repetition queue
+        </p>
+        <div className="text-xs text-slate-400 mt-1 flex items-center gap-1 h-4">
+          {saveState === "saving" && <><Loader2 size={12} className="animate-spin" /> Saving…</>}
+          {saveState === "saved" && <><CheckCircle2 size={12} className="text-emerald-500" /> Saved</>}
+          {saveState === "error" && <><AlertCircle size={12} className="text-red-500" /> Couldn't save — changes may not persist</>}
+        </div>
+      </header>
+
+      <div className="flex gap-1 mb-4 bg-slate-200/60 rounded-lg p-1">
+        {[
+          { id: "planner", label: "Calendar", icon: Calendar },
+          { id: "logger", label: "Log", icon: ClipboardList },
+          { id: "queue", label: "Review Queue", icon: Flame },
+        ].map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-sm font-medium transition ${
+              tab === t.id ? "bg-white shadow text-slate-900" : "text-slate-500"
+            }`}
+          >
+            <t.icon size={15} /> {t.label}
+            {t.id === "queue" && dueTopics.length > 0 && (
+              <span className="ml-1 bg-red-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center">
+                {dueTopics.length}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {tab === "planner" && (
+        <PlannerTab
+          schedule={schedule}
+          blocks={blocks}
+          blockedRanges={blockedRanges}
+          timeSettings={timeSettings}
+          setTimeSettings={setTimeSettings}
+          planStart={planStart}
+          setPlanStart={setPlanStart}
+          totalDays={totalDays}
+          planEnd={planEnd}
+          weeklyHours={weeklyHours}
+          updateBlock={updateBlock}
+          moveBlock={moveBlock}
+          deleteBlock={deleteBlock}
+          addBlock={addBlock}
+          updateBlocked={updateBlocked}
+          deleteBlocked={deleteBlocked}
+          addBlocked={addBlocked}
+        />
+      )}
+      {tab === "logger" && (
+        <LoggerTab uniqueSubjects={uniqueSubjects} onSubmit={submitLog} logs={logs} onDeleteLog={deleteLog} />
+      )}
+      {tab === "queue" && (
+        <QueueTab
+          dueTopics={dueTopics}
+          upcomingTopics={upcomingTopics}
+          interleaveMix={interleaveMix}
+          onDeleteTopic={deleteTopic}
+          sessionsThisWeek={sessionsThisWeek}
+          totalTopics={Object.keys(topics).length}
+        />
+      )}
+    </div>
+  );
+}
+
+// ================= PLANNER TAB =================
+function PlannerTab({
+  schedule, blocks, blockedRanges, timeSettings, setTimeSettings, planStart, setPlanStart,
+  totalDays, planEnd, weeklyHours, updateBlock, moveBlock, deleteBlock, addBlock,
+  updateBlocked, deleteBlocked, addBlocked,
+}) {
+  return (
+    <div>
+      <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
+        <h2 className="text-sm font-semibold text-slate-700 mb-3">Time budget</h2>
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <label className="text-xs text-slate-500">
+            Weekday hrs/day
+            <input type="number" step="0.5" min="0" value={timeSettings.weekdayHours}
+              onChange={(e) => setTimeSettings((s) => ({ ...s, weekdayHours: parseFloat(e.target.value) || 0 }))}
+              className="mt-1 w-full border border-slate-300 rounded-md px-2 py-1.5 text-slate-800" />
+          </label>
+          <label className="text-xs text-slate-500">
+            Weekend hrs/day
+            <input type="number" step="0.5" min="0" value={timeSettings.weekendHours}
+              onChange={(e) => setTimeSettings((s) => ({ ...s, weekendHours: parseFloat(e.target.value) || 0 }))}
+              className="mt-1 w-full border border-slate-300 rounded-md px-2 py-1.5 text-slate-800" />
+          </label>
+        </div>
+        <label className="text-xs text-slate-500 block mb-3">
+          Plan start date
+          <input type="date" value={planStart} onChange={(e) => setPlanStart(e.target.value)}
+            className="mt-1 w-full border border-slate-300 rounded-md px-2 py-1.5 text-slate-800" />
+        </label>
+        <div className="flex justify-between text-xs text-slate-600 bg-slate-50 rounded-md p-2">
+          <span><Clock size={12} className="inline mr-1" />{weeklyHours.toFixed(1)} hrs/week</span>
+          <span>{totalDays} working days</span>
+          <span>Ends {fmt(new Date(planEnd + "T00:00:00"))}</span>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
+        <h2 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-1.5">
+          <Plane size={14} /> Unavailable dates
+        </h2>
+        <div className="space-y-2">
+          {blockedRanges.map((r) => (
+            <div key={r.id} className="flex items-center gap-1.5 text-xs bg-red-50 border border-red-200 rounded-md p-2">
+              <input value={r.label} onChange={(e) => updateBlocked(r.id, { label: e.target.value })}
+                className="flex-1 min-w-0 bg-transparent outline-none font-medium" />
+              <input type="date" value={r.start} onChange={(e) => updateBlocked(r.id, { start: e.target.value })}
+                className="border border-slate-300 rounded px-1 py-0.5" />
+              <span>→</span>
+              <input type="date" value={r.end} onChange={(e) => updateBlocked(r.id, { end: e.target.value })}
+                className="border border-slate-300 rounded px-1 py-0.5" />
+              <button onClick={() => deleteBlocked(r.id)} className="text-slate-300 hover:text-red-500">
+                <Trash2 size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <button onClick={addBlocked}
+          className="mt-2 w-full flex items-center justify-center gap-1.5 py-2 rounded-lg border border-dashed border-slate-300 text-slate-500 text-xs hover:bg-slate-100">
+          <Plus size={13} /> Add unavailable dates
+        </button>
+        <p className="text-[10px] text-slate-400 mt-2">
+          Blocks below automatically skip these dates — a block's days are always working days, so trip weeks just push everything after them out.
+        </p>
+      </div>
+
+      <h2 className="text-sm font-semibold text-slate-700 mb-2">Blocks — reorder, resize by day, rename freely</h2>
+      <div className="space-y-2">
+        {schedule.map((b, i) => {
+          const style = GROUP_STYLE[b.group] || GROUP_STYLE.other;
+          return (
+            <div key={b.id} className={`rounded-lg border ${style.border} ${style.bg} p-3`}>
+              <div className="flex items-start gap-2">
+                <div className="flex flex-col gap-0.5 pt-0.5">
+                  <button onClick={() => moveBlock(b.id, -1)} disabled={i === 0} className="text-slate-400 disabled:opacity-20">
+                    <ChevronUp size={16} />
+                  </button>
+                  <button onClick={() => moveBlock(b.id, 1)} disabled={i === blocks.length - 1} className="text-slate-400 disabled:opacity-20">
+                    <ChevronDown size={16} />
+                  </button>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <input value={b.subject} onChange={(e) => updateBlock(b.id, { subject: e.target.value })}
+                    className="font-medium text-sm bg-transparent border-b border-transparent focus:border-slate-300 outline-none w-full mb-1" />
+                  <input value={b.note} placeholder="note (optional)" onChange={(e) => updateBlock(b.id, { note: e.target.value })}
+                    className="text-xs text-slate-500 bg-transparent outline-none w-full mb-2" />
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <select value={b.group} onChange={(e) => updateBlock(b.id, { group: e.target.value })}
+                      className={`rounded px-1.5 py-0.5 border-none ${style.chip} text-xs font-medium`}>
+                      {GROUPS.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}
+                    </select>
+                    <span className="flex items-center gap-1 text-slate-500">
+                      <button onClick={() => updateBlock(b.id, { days: Math.max(1, b.days - 1) })}
+                        className="w-5 h-5 rounded bg-white border border-slate-300 text-slate-600">−</button>
+                      {b.days}d
+                      <button onClick={() => updateBlock(b.id, { days: b.days + 1 })}
+                        className="w-5 h-5 rounded bg-white border border-slate-300 text-slate-600">+</button>
+                    </span>
+                    <span className="text-slate-500">{fmt(new Date(b.start + "T00:00:00"))} → {fmt(new Date(b.end + "T00:00:00"))}</span>
+                    {b.spansBreak && <span className="text-amber-600 bg-amber-100 rounded px-1.5 py-0.5">spans a break</span>}
+                  </div>
+                </div>
+                <button onClick={() => deleteBlock(b.id)} className="text-slate-300 hover:text-red-500 pt-0.5">
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <button onClick={addBlock}
+        className="mt-3 w-full flex items-center justify-center gap-1.5 py-2.5 rounded-lg border border-dashed border-slate-300 text-slate-500 text-sm hover:bg-slate-100">
+        <Plus size={15} /> Add block
+      </button>
+    </div>
+  );
+}
+
+// ================= LOGGER TAB =================
+function LoggerTab({ uniqueSubjects, onSubmit, logs, onDeleteLog }) {
+  const [date, setDate] = useState(todayISO());
+  const [subject, setSubject] = useState("");
+  const [topic, setTopic] = useState("");
+  const [activityType, setActivityType] = useState(ACTIVITY_TYPES[0]);
+  const [confidence, setConfidence] = useState(3);
+  const [notes, setNotes] = useState("");
+  const [autoSchedule, setAutoSchedule] = useState(true);
+
+  function handleSubmit() {
+    if (!subject.trim()) return;
+    onSubmit({ date, subject: subject.trim(), topic: topic.trim(), activityType, confidence, notes: notes.trim(), autoSchedule });
+    setTopic("");
+    setNotes("");
+  }
+
+  return (
+    <div>
+      <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4 space-y-3">
+        <h2 className="text-sm font-semibold text-slate-700">Quick log</h2>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="text-xs text-slate-500">
+            Date
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+              className="mt-1 w-full border border-slate-300 rounded-md px-2 py-1.5" />
+          </label>
+          <label className="text-xs text-slate-500">
+            Activity
+            <select value={activityType} onChange={(e) => setActivityType(e.target.value)}
+              className="mt-1 w-full border border-slate-300 rounded-md px-2 py-1.5">
+              {ACTIVITY_TYPES.map((a) => <option key={a}>{a}</option>)}
+            </select>
+          </label>
+        </div>
+        <label className="text-xs text-slate-500 block">
+          Subject
+          <input list="subjects" value={subject} onChange={(e) => setSubject(e.target.value)}
+            placeholder="e.g. Chemistry P1" className="mt-1 w-full border border-slate-300 rounded-md px-2 py-1.5" />
+          <datalist id="subjects">
+            {uniqueSubjects.map((s) => <option key={s} value={s} />)}
+          </datalist>
+        </label>
+        <label className="text-xs text-slate-500 block">
+          Topic
+          <input value={topic} onChange={(e) => setTopic(e.target.value)}
+            placeholder="e.g. moles & stoichiometry" className="mt-1 w-full border border-slate-300 rounded-md px-2 py-1.5" />
+        </label>
+        <div>
+          <span className="text-xs text-slate-500">Confidence (recall quality)</span>
+          <div className="flex gap-1.5 mt-1">
+            {[1, 2, 3, 4, 5].map((n) => (
+              <button key={n} onClick={() => setConfidence(n)}
+                className={`flex-1 py-1.5 rounded-md text-sm font-medium border ${
+                  confidence === n ? "bg-slate-800 text-white border-slate-800" : "bg-white text-slate-500 border-slate-300"
+                }`}>{n}</button>
+            ))}
+          </div>
+          <div className="flex justify-between text-[10px] text-slate-400 mt-0.5">
+            <span>blanked</span><span>nailed it</span>
+          </div>
+        </div>
+        <label className="text-xs text-slate-500 block">
+          Notes (optional)
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
+            className="mt-1 w-full border border-slate-300 rounded-md px-2 py-1.5" />
+        </label>
+        <label className="flex items-center gap-2 text-xs text-slate-600">
+          <input type="checkbox" checked={autoSchedule} onChange={(e) => setAutoSchedule(e.target.checked)} />
+          Schedule spaced-repetition review for this topic
+        </label>
+        <button onClick={handleSubmit} disabled={!subject.trim()}
+          className="w-full py-2.5 rounded-lg bg-slate-800 text-white text-sm font-medium disabled:opacity-40">
+          Log it
+        </button>
+      </div>
+
+      <h2 className="text-sm font-semibold text-slate-700 mb-2">Recent entries</h2>
+      <div className="space-y-1.5 max-h-96 overflow-y-auto">
+        {logs.length === 0 && <p className="text-xs text-slate-400">Nothing logged yet.</p>}
+        {logs.slice(0, 60).map((l) => (
+          <div key={l.id} className="bg-white border border-slate-200 rounded-md px-3 py-2 flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-xs text-slate-400">{l.date} · {l.activityType}</div>
+              <div className="text-sm font-medium truncate">{l.subject}{l.topic ? ` — ${l.topic}` : ""}</div>
+              {l.notes && <div className="text-xs text-slate-500 mt-0.5">{l.notes}</div>}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs bg-slate-100 rounded px-1.5 py-0.5">{l.confidence}/5</span>
+              <button onClick={() => onDeleteLog(l.id)} className="text-slate-300 hover:text-red-500">
+                <Trash2 size={13} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ================= QUEUE TAB =================
+function QueueTab({ dueTopics, upcomingTopics, interleaveMix, onDeleteTopic, sessionsThisWeek, totalTopics }) {
+  return (
+    <div>
+      <div className="grid grid-cols-3 gap-2 mb-4">
+        <StatCard label="Sessions this week" value={sessionsThisWeek} />
+        <StatCard label="Topics tracked" value={totalTopics} />
+        <StatCard label="Due now" value={dueTopics.length} accent={dueTopics.length > 0} />
+      </div>
+      {interleaveMix.length > 0 && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-4">
+          <h2 className="text-sm font-semibold text-indigo-800 flex items-center gap-1.5 mb-2">
+            <Shuffle size={15} /> Today's interleaved mix
+          </h2>
+          <p className="text-xs text-indigo-600 mb-2">
+            Different subjects, back to back — this is the fast way to build the discrimination exams actually test.
+          </p>
+          <div className="space-y-1.5">
+            {interleaveMix.map(([key, t]) => (
+              <div key={key} className="bg-white rounded-md px-2.5 py-1.5 text-sm flex justify-between">
+                <span>{t.subject} — {t.topic}</span>
+                <span className="text-xs text-slate-400">box {t.box + 1}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <h2 className="text-sm font-semibold text-slate-700 mb-2">Due for review</h2>
+      <div className="space-y-1.5 mb-4">
+        {dueTopics.length === 0 && <p className="text-xs text-slate-400">Nothing due — clear queue.</p>}
+        {dueTopics.map(([key, t]) => (
+          <div key={key} className="bg-white border border-red-200 rounded-md px-3 py-2 flex items-center justify-between">
+            <div>
+              <div className="text-sm font-medium">{t.subject}</div>
+              <div className="text-xs text-slate-500">{t.topic} · last confidence {t.lastConfidence}/5</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-red-500">was due {t.nextReviewDate}</span>
+              <button onClick={() => onDeleteTopic(key)} className="text-slate-300 hover:text-red-500">
+                <Trash2 size={13} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <h2 className="text-sm font-semibold text-slate-700 mb-2">Coming up (next 7 days)</h2>
+      <div className="space-y-1.5">
+        {upcomingTopics.length === 0 && <p className="text-xs text-slate-400">Nothing scheduled in the next week.</p>}
+        {upcomingTopics.map(([key, t]) => (
+          <div key={key} className="bg-white border border-slate-200 rounded-md px-3 py-2 flex items-center justify-between">
+            <div>
+              <div className="text-sm font-medium">{t.subject}</div>
+              <div className="text-xs text-slate-500">{t.topic}</div>
+            </div>
+            <span className="text-xs text-slate-400">{t.nextReviewDate}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ label, value, accent }) {
+  return (
+    <div className={`rounded-xl border p-3 text-center ${accent ? "bg-red-50 border-red-200" : "bg-white border-slate-200"}`}>
+      <div className={`text-xl font-bold ${accent ? "text-red-600" : "text-slate-800"}`}>{value}</div>
+      <div className="text-[10px] text-slate-500 mt-0.5">{label}</div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<RevisionPlanner />);
+</script>
+</body>
+</html>
